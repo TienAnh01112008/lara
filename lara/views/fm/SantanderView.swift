@@ -517,5 +517,4 @@ private struct santandertabview: View {
         }
     }
 }
-```
 
