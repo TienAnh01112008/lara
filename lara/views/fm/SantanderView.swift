@@ -1,34 +1,191 @@
-
 //
 //  SantanderView.swift
 //  symlin2k
 //
-//  Multi-tab File Manager UI
+//  Created by ruter on 15.02.26.
 //
 
 import SwiftUI
 import Combine
 
-// MARK: - Tab Model
+// MARK: - Navigation Manager
+//
+// DirectoryView.swift của Lara sử dụng:
+//
+// @EnvironmentObject private var nav: santandernav
+//
+// Mỗi tab sẽ có một santandernav riêng.
 
-final class santandertab: ObservableObject, Identifiable {
+final class santandernav: ObservableObject {
 
-    let id = UUID()
-
-    /// Thư mục gốc hiện tại của tab
     @Published var root: santanderitem
-
-    /// Navigation stack riêng của tab
     @Published var stack: [santanderitem] = []
 
     init(root: santanderitem) {
         self.root = root
     }
 
-    /// Reset tab về một thư mục mới
+    /// Chuyển navigation tới item mới.
     func go(_ item: santanderitem) {
         root = item
         stack.removeAll()
+    }
+}
+
+// MARK: - Tab Model
+//
+// Một santandertab chứa toàn bộ state của một tab.
+//
+// Tab 1:
+//     root  -> thư mục hiện tại
+//     stack -> navigation history
+//     nav   -> EnvironmentObject cho DirectoryView
+//
+// Tab 2 có state hoàn toàn riêng.
+
+final class santandertab: ObservableObject, Identifiable {
+
+    let id = UUID()
+
+    @Published var root: santanderitem
+
+    @Published var stack: [santanderitem] = []
+
+    /// Navigation object được DirectoryView.swift sử dụng.
+    let nav: santandernav
+
+    private var cancellables = Set<AnyCancellable>()
+
+    /// Ngăn vòng lặp khi đồng bộ hai chiều.
+    private var syncingFromNav = false
+    private var syncingFromTab = false
+
+    init(root: santanderitem) {
+
+        self.root = root
+        self.nav = santandernav(root: root)
+
+        setupSynchronization()
+    }
+
+    // MARK: Synchronization
+
+    private func setupSynchronization() {
+
+        // ------------------------------------------------------------
+        // nav.root -> tab.root
+        // ------------------------------------------------------------
+
+        nav.$root
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newRoot in
+
+                guard let self else {
+                    return
+                }
+
+                guard !self.syncingFromTab else {
+                    return
+                }
+
+                self.syncingFromNav = true
+
+                if self.root != newRoot {
+                    self.root = newRoot
+                }
+
+                self.syncingFromNav = false
+            }
+            .store(in: &cancellables)
+
+        // ------------------------------------------------------------
+        // nav.stack -> tab.stack
+        // ------------------------------------------------------------
+
+        nav.$stack
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newStack in
+
+                guard let self else {
+                    return
+                }
+
+                guard !self.syncingFromTab else {
+                    return
+                }
+
+                self.syncingFromNav = true
+
+                if self.stack != newStack {
+                    self.stack = newStack
+                }
+
+                self.syncingFromNav = false
+            }
+            .store(in: &cancellables)
+
+        // ------------------------------------------------------------
+        // tab.root -> nav.root
+        // ------------------------------------------------------------
+
+        $root
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newRoot in
+
+                guard let self else {
+                    return
+                }
+
+                guard !self.syncingFromNav else {
+                    return
+                }
+
+                self.syncingFromTab = true
+
+                if self.nav.root != newRoot {
+                    self.nav.root = newRoot
+                }
+
+                self.syncingFromTab = false
+            }
+            .store(in: &cancellables)
+
+        // ------------------------------------------------------------
+        // tab.stack -> nav.stack
+        // ------------------------------------------------------------
+
+        $stack
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newStack in
+
+                guard let self else {
+                    return
+                }
+
+                guard !self.syncingFromNav else {
+                    return
+                }
+
+                self.syncingFromTab = true
+
+                if self.nav.stack != newStack {
+                    self.nav.stack = newStack
+                }
+
+                self.syncingFromTab = false
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: Go
+
+    func go(_ item: santanderitem) {
+
+        root = item
+        stack.removeAll()
+
+        nav.root = item
+        nav.stack.removeAll()
     }
 }
 
@@ -38,11 +195,14 @@ final class santandertabmanager: ObservableObject {
 
     @Published var tabs: [santandertab] = []
 
-    /// Index của tab đang được chọn
     @Published var selectedindex: Int = 0
 
     init(defaultPath: String = "/") {
-        let path = defaultPath.isEmpty ? "/" : defaultPath
+
+        let path =
+            defaultPath.isEmpty
+            ? "/"
+            : defaultPath
 
         let initialTab = santandertab(
             root: santanderitem(
@@ -57,6 +217,7 @@ final class santandertabmanager: ObservableObject {
     // MARK: Current Tab
 
     var currenttab: santandertab? {
+
         guard !tabs.isEmpty else {
             return nil
         }
@@ -68,6 +229,17 @@ final class santandertabmanager: ObservableObject {
         return tabs[selectedindex]
     }
 
+    // MARK: Select Tab
+
+    func selecttab(_ index: Int) {
+
+        guard tabs.indices.contains(index) else {
+            return
+        }
+
+        selectedindex = index
+    }
+
     // MARK: Add Tab
 
     func addtab(path: String? = nil) {
@@ -75,9 +247,14 @@ final class santandertabmanager: ObservableObject {
         let newPath: String
 
         if let path, !path.isEmpty {
+
             newPath = path
+
         } else {
-            newPath = currenttab?.root.path ?? "/"
+
+            newPath =
+                currenttab?.root.path
+                ?? "/"
         }
 
         let newTab = santandertab(
@@ -89,7 +266,6 @@ final class santandertabmanager: ObservableObject {
 
         tabs.append(newTab)
 
-        // Tự động chuyển sang tab mới
         selectedindex = tabs.count - 1
     }
 
@@ -105,19 +281,25 @@ final class santandertabmanager: ObservableObject {
             return
         }
 
-        let wasSelected = selectedindex == index
+        let wasSelected =
+            selectedindex == index
 
         tabs.remove(at: index)
 
-        // Nếu đóng tab đứng trước tab hiện tại,
-        // index hiện tại phải giảm xuống.
+        // Nếu xóa tab phía trước tab hiện tại,
+        // index hiện tại phải giảm.
         if selectedindex > index {
+
             selectedindex -= 1
         }
-        // Nếu đóng tab cuối cùng đang được chọn,
-        // chuyển sang tab cuối còn lại.
-        else if wasSelected && selectedindex >= tabs.count {
-            selectedindex = tabs.count - 1
+
+        // Nếu xóa đúng tab đang chọn.
+        else if wasSelected {
+
+            if selectedindex >= tabs.count {
+                selectedindex =
+                    tabs.count - 1
+            }
         }
 
         // Safety
@@ -126,19 +308,9 @@ final class santandertabmanager: ObservableObject {
         }
 
         if selectedindex >= tabs.count {
-            selectedindex = max(0, tabs.count - 1)
+            selectedindex =
+                tabs.count - 1
         }
-    }
-
-    // MARK: Rename/Update Tab Position
-
-    func selecttab(_ index: Int) {
-
-        guard tabs.indices.contains(index) else {
-            return
-        }
-
-        selectedindex = index
     }
 }
 
@@ -155,20 +327,26 @@ struct SantanderView: View {
     private var mgr = laramgr.shared
 
     init(startPath: String = "/") {
-        self.startpath = startPath.isEmpty ? "/" : startPath
+
+        self.startpath =
+            startPath.isEmpty
+            ? "/"
+            : startPath
     }
 
     // MARK: Access Mode
 
     private var readsbx: Bool {
+
         selectedmethod != .vfs
     }
 
     private var writevfs: Bool {
+
         selectedmethod != .sbx
     }
 
-    // MARK: Exploit Ready
+    // MARK: Ready State
 
     private var ready: Bool {
 
@@ -181,7 +359,8 @@ struct SantanderView: View {
             return mgr.vfsready
 
         case .hybrid:
-            return mgr.sbxready && mgr.vfsready
+            return mgr.sbxready &&
+                   mgr.vfsready
         }
     }
 
@@ -209,8 +388,10 @@ struct SantanderView: View {
                         )
                         .imageScale(.large)
 
-                        Text("File Manager Not Ready!")
-                            .font(.headline)
+                        Text(
+                            "File Manager Not Ready!"
+                        )
+                        .font(.headline)
 
                         Text(
                             "Go back to the homepage, click Run Exploit, and then click Initalize System."
@@ -259,29 +440,40 @@ private struct santanderrootmultitab: View {
         VStack(spacing: 0) {
 
             // ============================================================
-            // CURRENT TAB CONTENT
+            // CURRENT TAB
             // ============================================================
 
-            Group {
+            if let currentTab =
+                tabmgr.currenttab {
 
-                if let currentTab = tabmgr.currenttab {
+                santandertabview(
+                    tab: currentTab,
+                    readsbx: readsbx,
+                    writevfs: writevfs
+                )
+                .id(currentTab.id)
 
-                    santandertabview(
-                        tab: currentTab,
-                        readsbx: readsbx,
-                        writevfs: writevfs
+            } else {
+
+                VStack(spacing: 12) {
+
+                    Image(
+                        systemName: "folder"
                     )
-                    .id(currentTab.id)
+                    .font(.largeTitle)
 
-                } else {
+                    Text("No Tabs")
+                        .font(.headline)
 
-                    ContentUnavailableView(
-                        "No Tabs",
-                        systemImage: "folder",
-                        description:
-                            Text("Open a new tab to continue.")
-                    )
+                    Button("Create Tab") {
+
+                        tabmgr.addtab()
+                    }
                 }
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
             }
 
             // ============================================================
@@ -308,9 +500,9 @@ private struct santandertabbar: View {
 
         HStack(spacing: 6) {
 
-            // ============================================================
-            // TABS
-            // ============================================================
+            // ------------------------------------------------------------
+            // Tabs
+            // ------------------------------------------------------------
 
             ScrollView(
                 .horizontal,
@@ -320,7 +512,9 @@ private struct santandertabbar: View {
                 HStack(spacing: 6) {
 
                     ForEach(
-                        Array(tabmgr.tabs.enumerated()),
+                        Array(
+                            tabmgr.tabs.enumerated()
+                        ),
                         id: \.element.id
                     ) { index, tab in
 
@@ -329,16 +523,19 @@ private struct santandertabbar: View {
                             selected:
                                 index ==
                                 tabmgr.selectedindex,
-
                             canClose:
                                 tabmgr.tabs.count > 1,
-
                             onSelect: {
-                                tabmgr.selecttab(index)
-                            },
 
+                                tabmgr.selecttab(
+                                    index
+                                )
+                            },
                             onClose: {
-                                tabmgr.closetab(at: index)
+
+                                tabmgr.closetab(
+                                    at: index
+                                )
                             }
                         )
                     }
@@ -346,26 +543,43 @@ private struct santandertabbar: View {
                 .padding(.horizontal, 8)
             }
 
-            // ============================================================
-            // NEW TAB
-            // ============================================================
+            // ------------------------------------------------------------
+            // New Tab
+            // ------------------------------------------------------------
 
             Button {
 
-                tabmgr.addtab()
+                let currentPath =
+                    tabmgr.currenttab?
+                        .root.path
+                    ?? "/"
+
+                tabmgr.addtab(
+                    path: currentPath
+                )
 
             } label: {
 
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(
-                        width: 34,
-                        height: 34
+                Image(
+                    systemName: "plus"
+                )
+                .font(
+                    .system(
+                        size: 15,
+                        weight: .semibold
                     )
-                    .background(
-                        Color.secondary.opacity(0.12)
-                    )
-                    .clipShape(Circle())
+                )
+                .frame(
+                    width: 34,
+                    height: 34
+                )
+                .background(
+                    Color.secondary
+                        .opacity(0.12)
+                )
+                .clipShape(
+                    Circle()
+                )
             }
             .buttonStyle(.plain)
             .padding(.trailing, 8)
@@ -390,30 +604,21 @@ private struct santandertabbutton: View {
 
     private var title: String {
 
-        let name = tab.root.name
+        let name =
+            tab.root.name
 
-        if name.isEmpty {
-            return "/"
-        }
-
-        return name
+        return name.isEmpty
+            ? "/"
+            : name
     }
 
     var body: some View {
 
         HStack(spacing: 5) {
 
-            // Folder icon
-
-            Image(
-                systemName:
-                    selected
-                    ? "folder.fill"
-                    : "folder"
-            )
-            .font(.caption)
-
-            // Tab title
+            // ------------------------------------------------------------
+            // Select
+            // ------------------------------------------------------------
 
             Button {
 
@@ -421,20 +626,35 @@ private struct santandertabbutton: View {
 
             } label: {
 
-                Text(title)
-                    .font(
-                        .subheadline.weight(
+                HStack(spacing: 5) {
+
+                    Image(
+                        systemName:
                             selected
-                            ? .semibold
-                            : .regular
-                        )
+                            ? "folder.fill"
+                            : "folder"
                     )
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .font(.caption)
+
+                    Text(title)
+                        .font(
+                            .subheadline.weight(
+                                selected
+                                ? .semibold
+                                : .regular
+                            )
+                        )
+                        .lineLimit(1)
+                        .truncationMode(
+                            .middle
+                        )
+                }
             }
             .buttonStyle(.plain)
 
+            // ------------------------------------------------------------
             // Close
+            // ------------------------------------------------------------
 
             if canClose {
 
@@ -460,8 +680,10 @@ private struct santandertabbutton: View {
         .frame(height: 36)
         .background(
             selected
-            ? Color.accentColor.opacity(0.15)
-            : Color.secondary.opacity(0.08)
+            ? Color.accentColor
+                .opacity(0.15)
+            : Color.secondary
+                .opacity(0.08)
         )
         .clipShape(
             RoundedRectangle(
@@ -493,8 +715,12 @@ private struct santandertabview: View {
                 readsbx: readsbx,
                 writevfs: writevfs
             )
+            .environmentObject(
+                tab.nav
+            )
             .navigationDestination(
-                for: santanderitem.self
+                for:
+                    santanderitem.self
             ) { item in
 
                 if item.isdir {
@@ -503,6 +729,9 @@ private struct santandertabview: View {
                         item: item,
                         readsbx: readsbx,
                         writevfs: writevfs
+                    )
+                    .environmentObject(
+                        tab.nav
                     )
 
                 } else {
@@ -518,3 +747,51 @@ private struct santandertabview: View {
     }
 }
 
+// MARK: - UIKit Helper
+//
+// Giữ lại extension của SantanderView.swift gốc.
+
+extension UIViewController {
+
+    func topMostViewController()
+        -> UIViewController {
+
+        if let presented =
+            presentedViewController {
+
+            return presented
+                .topMostViewController()
+        }
+
+        if let navigationController =
+            self as? UINavigationController {
+
+            return navigationController
+                .visibleViewController?
+                .topMostViewController()
+                ?? navigationController
+        }
+
+        if let tabBarController =
+            self as? UITabBarController {
+
+            return tabBarController
+                .selectedViewController?
+                .topMostViewController()
+                ?? tabBarController
+        }
+
+        for child in
+            children.reversed() {
+
+            if child.viewIfLoaded?
+                .window != nil {
+
+                return child
+                    .topMostViewController()
+            }
+        }
+
+        return self
+    }
+}
